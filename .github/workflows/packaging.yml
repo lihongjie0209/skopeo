@@ -88,6 +88,7 @@ jobs:
     needs: resolve-version
     if: needs.resolve-version.outputs.should_build == 'true'
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -134,7 +135,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           go build \
-            -tags "containers_image_openpgp" \
+            -tags "containers_image_openpgp exclude_graphdriver_btrfs" \
             -ldflags="-s -w" \
             -o "${{ matrix.artifact }}" \
             ./cmd/skopeo
@@ -143,7 +144,7 @@ jobs:
         if: matrix.goos == 'linux'
         shell: bash
         run: |
-          go test -tags "containers_image_openpgp" -timeout=60s ./cmd/skopeo/...
+          go test -tags "containers_image_openpgp exclude_graphdriver_btrfs" -timeout=60s ./cmd/skopeo/...
 
       - uses: actions/upload-artifact@v4
         with:
