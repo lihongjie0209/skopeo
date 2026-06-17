@@ -178,8 +178,6 @@ jobs:
             # to keep the release clean with only our built binaries
             echo "Cleaning inherited upstream artifacts from release ${VERSION}..."
             gh release delete "${VERSION}" --yes
-            # Also delete the remote tag so we can recreate it
-            git push --delete origin "${VERSION}" 2>/dev/null || true
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
