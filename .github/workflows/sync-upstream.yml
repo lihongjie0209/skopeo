@@ -1,0 +1,36 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 每6小时自动同步
+  workflow_dispatch:  # 手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync main branch from upstream
+        run: |
+          git remote add upstream https://github.com/containers/skopeo.git
+          git fetch upstream main
+          git merge upstream/main --no-edit
+          git push origin main
+
+      - name: Sync tags from upstream
+        run: |
+          git fetch upstream --tags --force
+          git push origin --tags --force
