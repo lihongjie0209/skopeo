@@ -169,7 +169,22 @@ jobs:
           find . -name 'skopeo-*' -type f | sort | xargs sha256sum > checksums.txt
           cat checksums.txt
 
-      - name: Create or update GitHub Release
+      - name: Clean release artifacts
+        shell: bash
+        run: |
+          VERSION="${{ needs.resolve-version.outputs.build_version }}"
+          if gh release view "${VERSION}" &>/dev/null; then
+            # Delete upstream's inherited artifacts (.1.md man pages, source archives)
+            # to keep the release clean with only our built binaries
+            echo "Cleaning inherited upstream artifacts from release ${VERSION}..."
+            gh release delete "${VERSION}" --yes
+            # Also delete the remote tag so we can recreate it
+            git push --delete origin "${VERSION}" 2>/dev/null || true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create fresh release
         shell: bash
         run: |
           VERSION="${{ needs.resolve-version.outputs.build_version }}"
@@ -192,15 +207,12 @@ jobs:
           ASSETS=$(find . -name 'skopeo-*' -type f | tr '\n' ' ')
           ASSETS="$ASSETS checksums.txt"
 
-          if gh release view "${VERSION}" &>/dev/null; then
-            echo "Updating existing release ${VERSION}..."
-            gh release upload "${VERSION}" $ASSETS --clobber
-          else
-            echo "Creating release ${VERSION}..."
-            gh release create "${VERSION}" \
-              --title "Skopeo ${VERSION}" \
-              --notes "${RELEASE_NOTES}" \
-              $ASSETS
-          fi
+          echo "Creating release ${VERSION}..."
+          gh release create "${VERSION}" \
+            --title "Skopeo ${VERSION}" \
+            --notes "${RELEASE_NOTES}" \
+            $ASSETS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
