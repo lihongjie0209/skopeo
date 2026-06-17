@@ -208,6 +208,8 @@ jobs:
           ASSETS="$ASSETS checksums.txt"
 
           echo "Creating release ${VERSION}..."
+          # Push the tag if it was cleaned (exists locally but remote was deleted)
+          git push origin "${VERSION}" 2>/dev/null || true
           gh release create "${VERSION}" \
             --title "Skopeo ${VERSION}" \
             --notes "${RELEASE_NOTES}" \
