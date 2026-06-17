@@ -2,7 +2,7 @@ name: Build & Release
 
 on:
   schedule:
-    - cron: '30 */6 * * *'  # 比 sync-upstream 晚30分钟，等上游 tag 同步完成
+    - cron: '30 */6 * * *'
   workflow_dispatch:
     inputs:
       version:
@@ -14,46 +14,69 @@ permissions:
 
 env:
   GO_VERSION: '1.25'
+  UPSTREAM_REPO: https://github.com/containers/skopeo.git
 
 jobs:
-  check-upstream:
-    if: github.event_name == 'schedule'
+  resolve-version:
     runs-on: ubuntu-latest
     outputs:
-      build_version: ${{ steps.check.outputs.build_version }}
+      build_version: ${{ steps.resolve.outputs.build_version }}
+      should_build: ${{ steps.resolve.outputs.should_build }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check for new upstream tag
-        id: check
+      - name: Resolve version
+        id: resolve
         run: |
-          git remote add upstream https://github.com/containers/skopeo.git
-          git fetch upstream --tags --force
+          case "${{ github.event_name }}" in
+            workflow_dispatch)
+              if [ -n "${{ github.event.inputs.version }}" ]; then
+                # Manual build with explicit version
+                VER="${{ github.event.inputs.version }}"
+                echo "build_version=${VER}" >> "$GITHUB_OUTPUT"
+                echo "should_build=true" >> "$GITHUB_OUTPUT"
+                echo "Manual build: ${VER}"
+              else
+                # Manual build without version: build latest upstream tag
+                git remote add upstream "${{ env.UPSTREAM_REPO }}"
+                git fetch upstream --tags --force
+                VER=$(git tag -l 'v*' --sort=-v:refname | head -1)
+                echo "build_version=${VER}" >> "$GITHUB_OUTPUT"
+                echo "should_build=true" >> "$GITHUB_OUTPUT"
+                echo "Manual build (no version specified): latest upstream ${VER}"
+              fi
+              ;;
+            schedule)
+              git remote add upstream "${{ env.UPSTREAM_REPO }}"
+              git fetch upstream --tags --force
 
-          LATEST_UPSTREAM=$(git tag -l 'v*' --sort=-v:refname | head -1)
-          echo "Latest upstream tag: $LATEST_UPSTREAM"
+              VER=$(git tag -l 'v*' --sort=-v:refname | head -1)
+              echo "Latest upstream tag: ${VER}"
 
-          if git rev-parse -q --verify "refs/tags/$LATEST_UPSTREAM" >/dev/null 2>&1; then
-            # Tag already synced, check if we already have a release for it
-            if gh release view "$LATEST_UPSTREAM" &>/dev/null; then
-              echo "Release already exists for $LATEST_UPSTREAM, skipping"
-              echo "build_version=" >> $GITHUB_OUTPUT
-            else
-              echo "Tag exists but no release, will build $LATEST_UPSTREAM"
-              echo "build_version=$LATEST_UPSTREAM" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "New upstream tag found: $LATEST_UPSTREAM"
-            echo "build_version=$LATEST_UPSTREAM" >> $GITHUB_OUTPUT
-          fi
+              if git rev-parse -q --verify "refs/tags/${VER}" >/dev/null 2>&1; then
+                if gh release view "${VER}" &>/dev/null; then
+                  echo "Release already exists for ${VER}, skipping"
+                  echo "should_build=false" >> "$GITHUB_OUTPUT"
+                else
+                  echo "Tag exists but no release, will build ${VER}"
+                  echo "build_version=${VER}" >> "$GITHUB_OUTPUT"
+                  echo "should_build=true" >> "$GITHUB_OUTPUT"
+                fi
+              else
+                echo "New upstream tag: ${VER}, syncing and building"
+                echo "build_version=${VER}" >> "$GITHUB_OUTPUT"
+                echo "should_build=true" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+          esac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Sync branches and tags to fork
-        if: steps.check.outputs.build_version != ''
+      - name: Sync upstream branches and tags to fork
+        if: steps.resolve.outputs.should_build == 'true'
         run: |
           git fetch upstream main
           git merge upstream/main --no-edit
@@ -61,10 +84,8 @@ jobs:
           git push origin --tags --force
 
   build:
-    needs: check-upstream
-    if: |
-      github.event_name != 'schedule' && github.event_name != 'workflow_run' ||
-      (github.event_name == 'schedule' && needs.check-upstream.outputs.build_version != '')
+    needs: resolve-version
+    if: needs.resolve-version.outputs.should_build == 'true'
     strategy:
       matrix:
         include:
@@ -72,12 +93,12 @@ jobs:
             goos: linux
             goarch: amd64
             artifact: skopeo-linux-amd64
-            desc: Linux amd64 (static, no glibc dependency)
+            desc: Linux amd64
           - os: ubuntu-latest
             goos: linux
             goarch: arm64
             artifact: skopeo-linux-arm64
-            desc: Linux arm64 (static, no glibc dependency)
+            desc: Linux arm64
           - os: windows-latest
             goos: windows
             goarch: amd64
@@ -90,28 +111,14 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Determine build version
-        id: version
+      - name: Checkout build version
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
-            VER="${{ github.event.inputs.version }}"
-          elif [ "${{ github.event_name }}" = "schedule" ]; then
-            VER="${{ needs.check-upstream.outputs.build_version }}"
-          else
-            VER="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "version=${VER}" >> $GITHUB_OUTPUT
-          echo "Building: ${VER}"
-
-      - name: Checkout specific tag
-        if: steps.version.outputs.version != ''
-        run: |
-          if ! git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.version }}" >/dev/null; then
-            echo "Tag ${{ steps.version.outputs.version }} not found locally, fetching..."
+          VER="${{ needs.resolve-version.outputs.build_version }}"
+          if ! git rev-parse -q --verify "refs/tags/${VER}" >/dev/null; then
             git fetch origin --tags --force
           fi
-          git checkout "refs/tags/${{ steps.version.outputs.version }}"
+          git checkout "refs/tags/${VER}"
 
       - uses: actions/setup-go@v5
         with:
@@ -131,70 +138,62 @@ jobs:
             -o "${{ matrix.artifact }}" \
             ./cmd/skopeo
 
-      - name: Run unit tests (Linux only)
+      - name: Unit tests (Linux)
         if: matrix.goos == 'linux'
         shell: bash
         run: |
           go test -tags "containers_image_openpgp" -timeout=60s ./cmd/skopeo/...
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
-  create-release:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-    needs: [check-upstream, build]
+  release:
+    needs: [resolve-version, build]
+    if: needs.resolve-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Determine release version
-        id: version
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
-            VER="${{ github.event.inputs.version }}"
-          else
-            VER="${{ needs.check-upstream.outputs.build_version }}"
-          fi
-          echo "version=${VER}" >> $GITHUB_OUTPUT
-
       - uses: actions/download-artifact@v4
 
-      - name: Generate checksums
+      - name: Checksums
+        shell: bash
         run: |
-          cd skopeo-*
-          sha256sum * > ../checksums.txt
-          cd ..
+          find . -name 'skopeo-*' -type f | sort | xargs sha256sum > checksums.txt
+          cat checksums.txt
 
-      - name: Create or update release
+      - name: Create or update GitHub Release
+        shell: bash
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.resolve-version.outputs.build_version }}"
+          RELEASE_NOTES=$(cat <<-EOM
+          Auto-built from upstream [containers/skopeo](${{ env.UPSTREAM_REPO }}) tag \`${VERSION}\`.
+
+          ## Downloads
+
+          | File | Description |
+          |------|-------------|
+          | \`skopeo-linux-amd64\` | Linux amd64 (fully static, works on CentOS 7+) |
+          | \`skopeo-linux-arm64\` | Linux arm64 (fully static, works on CentOS 7+) |
+          | \`skopeo-windows-amd64.exe\` | Windows amd64 |
+          | \`checksums.txt\` | SHA256 checksums |
+
+          > Linux builds use \`CGO_ENABLED=0\` + build tag \`containers_image_openpgp\` for full glibc portability. No gpgme dependency.
+          EOM
+          )
+
+          ASSETS=$(find . -name 'skopeo-*' -type f | tr '\n' ' ')
+          ASSETS="$ASSETS checksums.txt"
+
           if gh release view "${VERSION}" &>/dev/null; then
-            echo "Release ${VERSION} already exists, uploading artifacts..."
-            gh release upload "${VERSION}" ./*/skopeo-* checksums.txt --clobber
+            echo "Updating existing release ${VERSION}..."
+            gh release upload "${VERSION}" $ASSETS --clobber
           else
             echo "Creating release ${VERSION}..."
             gh release create "${VERSION}" \
               --title "Skopeo ${VERSION}" \
-              --notes "Auto-built from upstream [containers/skopeo](https://github.com/containers/skopeo) tag ${VERSION}.
-
-## Downloads
-
-| File | Description |
-|------|-------------|
-| skopeo-linux-amd64 | Linux amd64 (fully static, works on CentOS 7+) |
-| skopeo-linux-arm64 | Linux arm64 (fully static, works on CentOS 7+) |
-| skopeo-windows-amd64.exe | Windows amd64 |
-| checksums.txt | SHA256 checksums of all files |
-
-> Note: Linux builds use \`CGO_ENABLED=0\` + \`containers_image_openpgp\` for full glibc compatibility. No gpgme dependency."
-              ./*/skopeo-* checksums.txt
+              --notes "${RELEASE_NOTES}" \
+              $ASSETS
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
