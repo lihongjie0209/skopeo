@@ -169,24 +169,27 @@ jobs:
           find . -name 'skopeo-*' -type f | sort | xargs sha256sum > checksums.txt
           cat checksums.txt
 
-      - name: Clean release artifacts
+      - name: Verify and update release
         shell: bash
         run: |
           VERSION="${{ needs.resolve-version.outputs.build_version }}"
-          if gh release view "${VERSION}" &>/dev/null; then
-            # Delete upstream's inherited artifacts (.1.md man pages, source archives)
-            # to keep the release clean with only our built binaries
-            echo "Cleaning inherited upstream artifacts from release ${VERSION}..."
-            gh release delete "${VERSION}" --yes
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSETS=$(find . -name 'skopeo-*' -type f | tr '\n' ' ')
+          ASSETS="$ASSETS checksums.txt"
 
-      - name: Create fresh release
-        shell: bash
-        run: |
-          VERSION="${{ needs.resolve-version.outputs.build_version }}"
-          RELEASE_NOTES=$(cat <<-EOM
+          if gh release view "${VERSION}" &>/dev/null; then
+            # Delete upstream's inherited .1.md artifacts to keep the release clean
+            for asset in $(gh release view "${VERSION}" --json assets --jq '.assets[].name | select(endswith(".1.md"))'); do
+              echo "Removing upstream artifact: $asset"
+              gh release delete-asset "${VERSION}" "$asset" --yes
+            done
+            # Upload/replace our built binaries
+            echo "Uploading new artifacts to release ${VERSION}..."
+            gh release upload "${VERSION}" $ASSETS --clobber
+          else
+            echo "Creating release ${VERSION}..."
+            gh release create "${VERSION}" \
+              --title "Skopeo ${VERSION}" \
+              --notes "$(cat <<-EOM
           Auto-built from upstream [containers/skopeo](${{ env.UPSTREAM_REPO }}) tag \`${VERSION}\`.
 
           ## Downloads
@@ -200,17 +203,8 @@ jobs:
 
           > Linux builds use \`CGO_ENABLED=0\` + build tag \`containers_image_openpgp\` for full glibc portability. No gpgme dependency.
           EOM
-          )
-
-          ASSETS=$(find . -name 'skopeo-*' -type f | tr '\n' ' ')
-          ASSETS="$ASSETS checksums.txt"
-
-          echo "Creating release ${VERSION}..."
-          # Push the tag if it was cleaned (exists locally but remote was deleted)
-          git push origin "${VERSION}" 2>/dev/null || true
-          gh release create "${VERSION}" \
-            --title "Skopeo ${VERSION}" \
-            --notes "${RELEASE_NOTES}" \
-            $ASSETS
+          )" \
+              $ASSETS
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
