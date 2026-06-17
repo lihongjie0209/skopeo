@@ -178,10 +178,13 @@ jobs:
 
           if gh release view "${VERSION}" &>/dev/null; then
             # Delete upstream's inherited .1.md artifacts to keep the release clean
-            for asset in $(gh release view "${VERSION}" --json assets --jq '.assets[].name | select(endswith(".1.md"))'); do
-              echo "Removing upstream artifact: $asset"
-              gh release delete-asset "${VERSION}" "$asset" --yes
-            done
+            ASSETS_TO_DELETE=$(gh release view "${VERSION}" --json assets --jq '.assets[].name | select(endswith(".1.md"))' 2>/dev/null || true)
+            if [ -n "$ASSETS_TO_DELETE" ]; then
+              echo "$ASSETS_TO_DELETE" | while IFS= read -r asset; do
+                echo "Removing upstream artifact: $asset"
+                gh release delete-asset "${VERSION}" "$asset" --yes 2>/dev/null || true
+              done
+            fi
             # Upload/replace our built binaries
             echo "Uploading new artifacts to release ${VERSION}..."
             gh release upload "${VERSION}" $ASSETS --clobber
