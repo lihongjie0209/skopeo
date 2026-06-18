@@ -166,14 +166,14 @@ jobs:
       - name: Checksums
         shell: bash
         run: |
-          find . -name 'skopeo-*' -type f | sort | xargs sha256sum > checksums.txt
+          find ./skopeo-*/ -type f | sort | xargs sha256sum > checksums.txt
           cat checksums.txt
 
       - name: Verify and update release
         shell: bash
         run: |
           VERSION="${{ needs.resolve-version.outputs.build_version }}"
-          ASSETS=$(find . -name 'skopeo-*' -type f | tr '\n' ' ')
+          ASSETS=$(find ./skopeo-*/ -type f | tr '\n' ' ')
           ASSETS="$ASSETS checksums.txt"
 
           if gh release view "${VERSION}" &>/dev/null; then
