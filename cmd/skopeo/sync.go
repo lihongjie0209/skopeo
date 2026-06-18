@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -698,6 +699,12 @@ func (opts *syncOptions) run(args []string, stdout io.Writer) (retErr error) {
 
 			if !opts.scoped {
 				destSuffix = path.Base(destSuffix)
+			}
+
+			// On Windows, replace colons (from Docker reference port/tag) with underscores
+			// because colons are not allowed in file paths on Windows.
+			if opts.destination == directory.Transport.Name() && runtime.GOOS == "windows" {
+				destSuffix = strings.ReplaceAll(destSuffix, ":", "_")
 			}
 
 			destRef, err := destinationReference(path.Join(destination, destSuffix)+opts.appendSuffix, opts.destination)
