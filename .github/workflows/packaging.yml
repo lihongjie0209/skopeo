@@ -80,10 +80,14 @@ jobs:
         run: |
           git remote add upstream ${{ env.UPSTREAM_REPO }} 2>/dev/null || true
           git fetch upstream main
+          git fetch origin main
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git merge upstream/main --no-edit
-          git push origin main
+          git merge upstream/main --no-edit --no-commit || true
+          # Restore our fork's workflow files to avoid GITHUB_TOKEN restriction
+          git checkout HEAD -- .github/workflows/ 2>/dev/null || true
+          git commit --no-edit || echo "Nothing to commit"
+          git push origin main --force
           git push origin --tags --force
 
   build:
