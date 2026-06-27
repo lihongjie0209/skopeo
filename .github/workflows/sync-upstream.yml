@@ -25,8 +25,10 @@ jobs:
 
       - name: Sync main branch from upstream
         run: |
-          git remote add upstream https://github.com/containers/skopeo.git
+          git remote add upstream https://github.com/containers/skopeo.git 2>/dev/null || true
           git fetch upstream main
+          git fetch origin main
+          git checkout main
           git merge upstream/main --no-edit
           git push origin main
 
