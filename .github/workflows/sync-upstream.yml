@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  workflows: write
 
 jobs:
   sync:
@@ -30,7 +29,10 @@ jobs:
           git fetch upstream main
           git fetch origin main
           git checkout main
-          git merge upstream/main --no-edit
+          git merge upstream/main --no-edit --no-commit || true
+          # Restore our fork's workflow files to avoid GITHUB_TOKEN push restriction
+          git checkout HEAD -- .github/workflows/ 2>/dev/null || true
+          git commit --no-edit || echo "Nothing to commit"
           git push origin main
 
       - name: Sync tags from upstream
