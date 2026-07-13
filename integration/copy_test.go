@@ -204,6 +204,58 @@ func (s *copySuite) TestCopyWithPlatformList() {
 	assert.Equal(t, 3, len(manifestFiles), "Expected manifest list + 2 platform manifests")
 }
 
+func (s *copySuite) TestCopyPlatformListWithStripSparse() {
+	t := s.T()
+	dir1 := t.TempDir()
+
+	sourceManifest := combinedOutputOfCommand(t, skopeoBinary, "inspect", "--retry-times", "3", "--raw", knownListImage)
+	sourceList, err := manifest.Schema2ListFromManifest([]byte(sourceManifest))
+	require.NoError(t, err)
+	var strippedPlatform string
+	for _, m := range sourceList.Manifests {
+		p := m.Platform.OS + "/" + m.Platform.Architecture
+		if p != "linux/amd64" && p != "linux/arm64" {
+			strippedPlatform = p
+			break
+		}
+	}
+	require.NotEmpty(t, strippedPlatform, "source image should contain a platform outside linux/amd64,linux/arm64")
+
+	assertSkopeoSucceeds(t, "", "copy", "--retry-times", "3", "--multi-arch=linux/amd64,linux/arm64",
+		"--strip-removed-platforms", "--remove-list-signatures", knownListImage, "dir:"+dir1)
+
+	manifestPath := filepath.Join(dir1, "manifest.json")
+	readManifest, err := os.ReadFile(manifestPath)
+	require.NoError(t, err)
+	mimeType := manifest.GuessMIMEType(readManifest)
+	assert.Equal(t, "application/vnd.docker.distribution.manifest.list.v2+json", mimeType)
+
+	destList, err := manifest.Schema2ListFromManifest(readManifest)
+	require.NoError(t, err)
+	assert.Len(t, destList.Manifests, 2)
+
+	destPlatforms := map[string]struct{}{}
+	for _, m := range destList.Manifests {
+		destPlatforms[m.Platform.OS+"/"+m.Platform.Architecture] = struct{}{}
+	}
+	assert.Contains(t, destPlatforms, "linux/amd64")
+	assert.Contains(t, destPlatforms, "linux/arm64")
+	assert.NotContains(t, destPlatforms, strippedPlatform)
+
+	// Verify that we still have 2 platform manifests (manifest list + 2 platforms = 3 manifest files)
+	manifestFiles, err := filepath.Glob(filepath.Join(dir1, "*manifest.json"))
+	require.NoError(t, err)
+	assert.Equal(t, 3, len(manifestFiles), "Expected manifest list + 2 platform manifests after stripping")
+}
+
+func (s *copySuite) TestCopyPlatformListStripRemovedPlatformsFailsWhenManifestListCannotBeModified() {
+	t := s.T()
+	dir1 := t.TempDir()
+	assertSkopeoFails(t, `.*Instructed to preserve digests.*`,
+		"copy", "--retry-times", "3", "--multi-arch=linux/amd64,linux/arm64",
+		"--strip-removed-platforms", "--preserve-digests", knownListImage, "dir:"+dir1)
+}
+
 func (s *copySuite) TestCopyWithManifestListConverge() {
 	t := s.T()
 	oci1 := t.TempDir()
